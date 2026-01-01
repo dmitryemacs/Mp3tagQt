@@ -21,7 +21,28 @@ Mp3tagQt is a graphical user interface application built with Qt framework that 
 
 ## Building
 
-### Windows (MinGW)
+### Using Makefile (Recommended)
+
+The project includes a Makefile for convenient building and running:
+
+```bash
+# Generate CMake configuration files
+make generate
+
+# Build the project
+make build
+
+# Build and run the application
+make run
+
+# Clean build directory
+make clean
+
+# Generate, build and run (all in one)
+make all
+```
+
+### Windows (Qt 6.10.1 with MinGW)
 
 1. Clone the repository:
    ```bash
@@ -37,12 +58,12 @@ Mp3tagQt is a graphical user interface application built with Qt framework that 
 
 3. Configure the project with CMake:
    ```bash
-   cmake -G "MinGW Makefiles" ..
+   cmake -S D:/QtProjects/Mp3tagQt -B D:/QtProjects/Mp3tagQt/build/Desktop_Qt_6_10_1_llvm_mingw_64_bit-Debug "-DCMAKE_COLOR_DIAGNOSTICS:BOOL=ON" "-DCMAKE_PREFIX_PATH:PATH=D:/Programms/Qt/6.10.1/llvm-mingw_64" "-DCMAKE_C_COMPILER:FILEPATH=D:/Programms/Qt/Tools/llvm-mingw1706_64/bin/clang.exe" "-DCMAKE_CXX_FLAGS_INIT:STRING=-DQT_QML_DEBUG" "-DCMAKE_GENERATOR:STRING=Ninja" "-DCMAKE_CXX_COMPILER:FILEPATH=D:/Programms/Qt/Tools/llvm-mingw1706_64/bin/clang++.exe" "-DCMAKE_BUILD_TYPE:STRING=Debug"
    ```
 
 4. Build the project:
    ```bash
-   cmake --build .
+   cmake --build D:/QtProjects/Mp3tagQt/build/Desktop_Qt_6_10_1_llvm_mingw_64_bit-Debug --target all
    ```
 
 ### Linux/macOS
