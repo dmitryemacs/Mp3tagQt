@@ -1,0 +1,43 @@
+# Qt Creator files
+.qtcreator/
+
+# Compiled objects
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Debug files
+*.pdb
+*.ilk
+*.exp
+
+# IDE specific files
+*.user
+*.suo
+*.sln
+*.vcproj
+
+# Qt specific
+*.qch
+*.qrc
+*.qmlc
+*.qmltypes
+*.qmlproject
+*.qmlimport
+*.qmlcache
+
+# CMake files
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+*.cmake
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
