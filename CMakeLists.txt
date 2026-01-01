@@ -9,13 +9,14 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Multimedia)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia)
 
 # Add TagLib for MP3 tag editing
 # Use TagLib from source as subproject
 add_subdirectory(taglib-2.1.1)
 set(TAGLIB_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/taglib-2.1.1"
     "${CMAKE_CURRENT_SOURCE_DIR}/taglib-2.1.1/taglib"
     "${CMAKE_CURRENT_SOURCE_DIR}/taglib-2.1.1/taglib/toolkit"
     "${CMAKE_CURRENT_SOURCE_DIR}/taglib-2.1.1/taglib/mpeg"
@@ -30,6 +31,11 @@ set(PROJECT_SOURCES
         mainwindow.cpp
         mainwindow.h
         mainwindow.ui
+        mediaplayer.cpp
+        mediaplayer.h
+        settingsdialog.cpp
+        settingsdialog.h
+        resources.qrc
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -55,7 +61,7 @@ else()
     endif()
 endif()
 
-target_link_libraries(mp3tag PRIVATE Qt${QT_VERSION_MAJOR}::Widgets "${CMAKE_CURRENT_BINARY_DIR}/taglib-2.1.1/taglib/libtag.a")
+target_link_libraries(mp3tag PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Multimedia "${CMAKE_CURRENT_BINARY_DIR}/taglib-2.1.1/taglib/libtag.a")
 target_include_directories(mp3tag PRIVATE ${TAGLIB_INCLUDE_DIRS})
 target_compile_definitions(mp3tag PRIVATE TAGLIB_STATIC)
 
