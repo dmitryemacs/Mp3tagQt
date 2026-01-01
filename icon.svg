@@ -1,7 +1,0 @@
-<?xml version="1.0" ?>
-<svg width="128" height="128" version="1.1" xmlns="http://www.w3.org/2000/svg">
-<polygon points="10,0 10,128 118,128 118,36 82,0" style="fill:#1296db"/>
-<polygon points="82,0 82,36 118,36" style="fill:#0E5BD3"/>
-<text x="40" y="60" fill="white" font-size="30" style="font-weight:bold;">ID3</text>
-<text x="30" y="120" fill="white" font-size="35" style="font-weight:bold;">MP3</text>
-</svg>
