@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "mediaplayer.h"
+#include "settingsdialog.h"
 
 #include <QFileDialog>
 #include <QMessageBox>
@@ -34,11 +35,16 @@ MainWindow::MainWindow(QWidget *parent)
     , mediaPlayer(new MediaPlayer(this))
     , currentFilePath("")
     , undoPerformed(false)
+    , settings(new QSettings("Mp3TagQt", "Settings", this))
 {
     ui->setupUi(this);
     setupUI();
     setupFileSystemModel();
     setupConnections();
+
+    // Apply saved theme
+    QString theme = settings->value("theme", "light").toString();
+    applyTheme(theme);
 }
 
 MainWindow::~MainWindow()
@@ -78,6 +84,7 @@ void MainWindow::setupUI()
     actionRemove = ui->actionRemove;
     actionExit = ui->actionExit;
     actionAbout = ui->actionAbout;
+    actionSettings = new QAction(tr("Settings"), this);
     actionUndo = ui->actionUndo;
     actionRedo = ui->actionRedo;
 
@@ -88,12 +95,14 @@ void MainWindow::setupUI()
         actionRemove->setIcon(QIcon(":/icons/remove.png"));
         actionUndo->setIcon(QIcon(":/icons/undo.png"));
         actionRedo->setIcon(QIcon(":/icons/redo.png"));
+        actionSettings->setIcon(QIcon(":/icons/settings.png"));
     }
 
     // Add actions to toolbar
     ui->mainToolBar->addAction(actionOpen);
     ui->mainToolBar->addAction(actionSave);
     ui->mainToolBar->addAction(actionRemove);
+    ui->mainToolBar->addAction(actionSettings);
     ui->mainToolBar->addSeparator();
     ui->mainToolBar->addAction(actionUndo);
     ui->mainToolBar->addAction(actionRedo);
@@ -184,6 +193,7 @@ void MainWindow::setupConnections()
     connect(actionRemove, &QAction::triggered, this, &MainWindow::on_actionRemove_triggered);
     connect(actionUndo, &QAction::triggered, this, &MainWindow::on_actionUndo_triggered);
     connect(actionRedo, &QAction::triggered, this, &MainWindow::on_actionRedo_triggered);
+    connect(actionSettings, &QAction::triggered, this, &MainWindow::on_actionSettings_triggered);
 
     // Connect file tree view
     connect(fileTreeView, &QTreeView::doubleClicked, this, &MainWindow::on_fileTreeView_doubleClicked);
@@ -265,6 +275,15 @@ void MainWindow::on_actionExit_triggered()
 void MainWindow::on_actionAbout_triggered()
 {
     showAboutDialog();
+}
+
+void MainWindow::on_actionSettings_triggered()
+{
+    SettingsDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        QString theme = dialog.getSelectedTheme();
+        applyTheme(theme);
+    }
 }
 
 void MainWindow::on_actionUndo_triggered()
@@ -897,4 +916,46 @@ void MainWindow::on_changeCoverButton_clicked()
     // Mark as modified
     enableSaveActions(true);
     updateStatusBar(tr("Cover image changed"));
+}
+
+void MainWindow::applyTheme(const QString &theme)
+{
+    QPalette palette;
+
+    if (theme == "dark") {
+        // Dark theme
+        palette.setColor(QPalette::Window, QColor(53, 53, 53));
+        palette.setColor(QPalette::WindowText, Qt::white);
+        palette.setColor(QPalette::Base, QColor(25, 25, 25));
+        palette.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+        palette.setColor(QPalette::ToolTipBase, Qt::white);
+        palette.setColor(QPalette::ToolTipText, Qt::white);
+        palette.setColor(QPalette::Text, Qt::white);
+        palette.setColor(QPalette::Button, QColor(53, 53, 53));
+        palette.setColor(QPalette::ButtonText, Qt::white);
+        palette.setColor(QPalette::BrightText, Qt::red);
+        palette.setColor(QPalette::Link, QColor(42, 130, 218));
+        palette.setColor(QPalette::Highlight, QColor(42, 130, 218));
+        palette.setColor(QPalette::HighlightedText, Qt::black);
+    } else {
+        // Light theme (default)
+        palette = QApplication::palette(); // Reset to default
+    }
+
+    QApplication::setPalette(palette);
+    setPaletteRecursive(this, palette);
+    this->update();
+
+    // Save theme setting
+    settings->setValue("theme", theme);
+}
+
+void MainWindow::setPaletteRecursive(QWidget *widget, const QPalette &palette)
+{
+    widget->setPalette(palette);
+    widget->update();
+
+    for (QWidget *child : widget->findChildren<QWidget*>()) {
+        setPaletteRecursive(child, palette);
+    }
 }

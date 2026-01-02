@@ -21,6 +21,7 @@
 #include <QFileDialog>
 #include <QStandardPaths>
 #include <QMediaPlayer>
+#include <QSettings>
 
 // Forward declaration for TagLib
 namespace TagLib {
@@ -49,6 +50,7 @@ private slots:
     void on_actionRemove_triggered();
     void on_actionExit_triggered();
     void on_actionAbout_triggered();
+    void on_actionSettings_triggered();
     void on_actionUndo_triggered();
     void on_actionRedo_triggered();
 
@@ -111,6 +113,8 @@ private:
     QString undoneAlbumArtist;
     bool undoPerformed;
 
+    QSettings *settings;
+
     // File system model
     QFileSystemModel *fileSystemModel;
 
@@ -160,6 +164,7 @@ private:
     QAction *actionRemove;
     QAction *actionExit;
     QAction *actionAbout;
+    QAction *actionSettings;
     QAction *actionUndo;
     QAction *actionRedo;
 
@@ -176,6 +181,8 @@ private:
     void updateStatusBar(const QString &message);
     void enableSaveActions(bool enable);
     void showAboutDialog();
+    void applyTheme(const QString &theme);
+    void setPaletteRecursive(QWidget *widget, const QPalette &palette);
 };
 
 #endif // MAINWINDOW_H

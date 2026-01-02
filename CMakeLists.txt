@@ -33,6 +33,8 @@ set(PROJECT_SOURCES
         mainwindow.ui
         mediaplayer.cpp
         mediaplayer.h
+        settingsdialog.cpp
+        settingsdialog.h
         resources.qrc
 )
 
