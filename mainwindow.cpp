@@ -1,31 +1,57 @@
 #include "mainwindow.h"
-#include "./ui_mainwindow.h"
+#include "ui_mainwindow.h"
+#include "mediaplayer.h"
 
 #include <QFileDialog>
 #include <QMessageBox>
-#include <QPixmap>
+#include <QStandardPaths>
+#include <QDir>
+#include <QFileInfo>
+#include <QDateTime>
+#include <QMimeDatabase>
+#include <QMimeType>
+#include <QImageReader>
 #include <QBuffer>
+#include <QPixmap>
 #include <QDebug>
-#include <QTemporaryFile>
 
-#include <fileref.h>
-#include <tag.h>
-#include <id3v2tag.h>
-#include <attachedpictureframe.h>
-#include <mpegfile.h>
-#include <id3v2frame.h>
-#include <id3v2header.h>
+#include "taglib/fileref.h"
+#include "taglib/tag.h"
+#include "taglib/audioproperties.h"
+#include "taglib/mpeg/mpegfile.h"
+#include "taglib/mpeg/id3v2/id3v2tag.h"
+#include "taglib/mpeg/id3v2/frames/attachedpictureframe.h"
+#include "taglib/mpeg/id3v2/frames/textidentificationframe.h"
+#include "taglib/toolkit/tpropertymap.h"
+
+#include <algorithm>
+#include <memory>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
+    , fileSystemModel(new QFileSystemModel(this))
+    , mediaPlayer(new MediaPlayer(this))
+    , currentFilePath("")
+    , undoPerformed(false)
 {
-    qDebug() << "MainWindow constructor called";
     ui->setupUi(this);
+    setupUI();
+    setupFileSystemModel();
+    setupConnections();
+}
 
-    // Initialize UI elements
-    loadButton = ui->loadButton;
-    fileLabel = ui->fileLabel;
+MainWindow::~MainWindow()
+{
+    delete ui;
+}
+
+void MainWindow::setupUI()
+{
+    // Set up UI elements
+    fileTreeView = ui->fileTreeView;
+    fileCountLabel = ui->fileCountLabel;
+    totalSizeLabel = ui->totalSizeLabel;
     coverLabel = ui->coverLabel;
     titleEdit = ui->titleEdit;
     artistEdit = ui->artistEdit;
@@ -33,374 +59,591 @@ MainWindow::MainWindow(QWidget *parent)
     yearEdit = ui->yearEdit;
     genreEdit = ui->genreEdit;
     commentEdit = ui->commentEdit;
-    saveButton = ui->saveButton;
-    resetButton = ui->resetButton;
+    trackEdit = ui->trackEdit;
+    discEdit = ui->discEdit;
+    composerEdit = ui->composerEdit;
+    albumArtistEdit = ui->albumArtistEdit;
+    fileNameValue = ui->fileNameValue;
+    filePathValue = ui->filePathValue;
+    fileSizeValue = ui->fileSizeValue;
+    fileTypeValue = ui->fileTypeValue;
+    fileDurationValue = ui->fileDurationValue;
+    fileBitrateValue = ui->fileBitrateValue;
+    fileSampleRateValue = ui->fileSampleRateValue;
+    fileChannelsValue = ui->fileChannelsValue;
 
-    // Configure cover label for proper album cover display
-    qDebug() << "Configuring cover label";
-    coverLabel->setMinimumSize(200, 200); // Set minimum size for cover
-    coverLabel->setMaximumSize(200, 200); // Set maximum size for cover
+    // Set up actions from UI
+    actionOpen = ui->actionOpen;
+    actionSave = ui->actionSave;
+    actionRemove = ui->actionRemove;
+    actionExit = ui->actionExit;
+    actionAbout = ui->actionAbout;
+    actionUndo = ui->actionUndo;
+    actionRedo = ui->actionRedo;
+
+    // Try to load icons if available
+    if (QFile::exists(":/icons/open.png")) {
+        actionOpen->setIcon(QIcon(":/icons/open.png"));
+        actionSave->setIcon(QIcon(":/icons/save.png"));
+        actionRemove->setIcon(QIcon(":/icons/remove.png"));
+        actionUndo->setIcon(QIcon(":/icons/undo.png"));
+        actionRedo->setIcon(QIcon(":/icons/redo.png"));
+    }
+
+    // Add actions to toolbar
+    ui->mainToolBar->addAction(actionOpen);
+    ui->mainToolBar->addAction(actionSave);
+    ui->mainToolBar->addAction(actionRemove);
+    ui->mainToolBar->addSeparator();
+    ui->mainToolBar->addAction(actionUndo);
+    ui->mainToolBar->addAction(actionRedo);
+
+    // Set initial state
+    actionSave->setEnabled(false);
+    actionRemove->setEnabled(false);
+    actionUndo->setEnabled(false);
+    actionRedo->setEnabled(false);
+
+    // Set up cover label
+    coverLabel->setStyleSheet("QLabel { background-color: #f0f0f0; border: 1px solid #ccc; }");
     coverLabel->setAlignment(Qt::AlignCenter);
-    coverLabel->setStyleSheet("background-color: #f0f0f0; border: 1px solid #ccc;");
-    coverLabel->setScaledContents(false); // We handle scaling manually
-    qDebug() << "Cover label configured with size:" << coverLabel->size();
 
-    // Setup connections
-    setupUIConnections();
+    // Set up file info labels
+    fileNameValue->setText("-");
+    filePathValue->setText("-");
+    fileSizeValue->setText("-");
+    fileTypeValue->setText("-");
+    fileDurationValue->setText("-");
+    fileBitrateValue->setText("-");
+    fileSampleRateValue->setText("-");
+    fileChannelsValue->setText("-");
 
-    // Initialize UI state
-    clearTags();
-    qDebug() << "MainWindow initialized";
+    // Set up player UI elements
+    playButton = ui->playButton;
+    pauseButton = ui->pauseButton;
+    stopButton = ui->stopButton;
+    volumeSlider = ui->volumeSlider;
+    playbackSlider = ui->playbackSlider;
+    currentFileValue = ui->currentFileValue;
+    playbackStatusValue = ui->playbackStatusValue;
+    playbackPositionValue = ui->playbackPositionValue;
+    playbackDurationValue = ui->playbackDurationValue;
+    playerCoverLabel = ui->playerCoverLabel;
+    changeCoverButton = ui->changeCoverButton;
+
+    // Set up player cover label
+    playerCoverLabel->setStyleSheet("QLabel { background-color: #f0f0f0; border: 1px solid #ccc; }");
+    playerCoverLabel->setAlignment(Qt::AlignCenter);
+
+    // Set up player UI
+    playButton->setEnabled(false);
+    pauseButton->setEnabled(false);
+    stopButton->setEnabled(false);
+    currentFileValue->setText("-");
+    playbackStatusValue->setText("Stopped");
+    playbackPositionValue->setText("00:00");
+    playbackDurationValue->setText("00:00");
+
+    // Set up splitter sizes
+    ui->mainSplitter->setStretchFactor(0, 1);
+    ui->mainSplitter->setStretchFactor(1, 2);
 }
 
-MainWindow::~MainWindow()
+void MainWindow::setupFileSystemModel()
 {
-    qDebug() << "MainWindow destructor called";
-    delete ui;
-    qDebug() << "MainWindow destroyed";
+    // Set up file system model
+    fileSystemModel->setRootPath(QDir::homePath());
+    fileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
+    fileSystemModel->setNameFilters(QStringList() << "*.mp3" << "*.flac" << "*.ogg" << "*.wma" << "*.m4a");
+    fileSystemModel->setNameFilterDisables(false);
+
+    // Set model to tree view
+    fileTreeView->setModel(fileSystemModel);
+    fileTreeView->setRootIndex(fileSystemModel->index(QDir::homePath()));
+    fileTreeView->setColumnHidden(1, true); // Hide size column
+    fileTreeView->setColumnHidden(2, true); // Hide type column
+    fileTreeView->setColumnHidden(3, true); // Hide date column
+
+    // Set header
+    fileSystemModel->setHeaderData(0, Qt::Horizontal, tr("Files"));
+
+    // Set initial file count
+    fileCountLabel->setText(tr("Files: 0"));
+    totalSizeLabel->setText(tr("Size: 0 KB"));
 }
 
-void MainWindow::setupUIConnections()
+void MainWindow::setupConnections()
 {
-    qDebug() << "Setting up UI connections";
-    connect(loadButton, &QPushButton::clicked, this, &MainWindow::on_loadButton_clicked);
-    connect(saveButton, &QPushButton::clicked, this, &MainWindow::on_saveButton_clicked);
-    connect(resetButton, &QPushButton::clicked, this, &MainWindow::on_resetButton_clicked);
-    qDebug() << "UI connections set up";
+    // Connect menu actions
+    connect(actionExit, &QAction::triggered, this, &MainWindow::on_actionExit_triggered);
+    connect(actionAbout, &QAction::triggered, this, &MainWindow::on_actionAbout_triggered);
+
+    // Connect our custom actions
+    connect(actionOpen, &QAction::triggered, this, &MainWindow::on_actionOpen_triggered);
+    connect(actionSave, &QAction::triggered, this, &MainWindow::on_actionSave_triggered);
+    connect(actionRemove, &QAction::triggered, this, &MainWindow::on_actionRemove_triggered);
+    connect(actionUndo, &QAction::triggered, this, &MainWindow::on_actionUndo_triggered);
+    connect(actionRedo, &QAction::triggered, this, &MainWindow::on_actionRedo_triggered);
+
+    // Connect file tree view
+    connect(fileTreeView, &QTreeView::doubleClicked, this, &MainWindow::on_fileTreeView_doubleClicked);
+
+    // Connect tag edit fields
+    connect(titleEdit, &QLineEdit::textChanged, this, &MainWindow::on_titleEdit_textChanged);
+    connect(artistEdit, &QLineEdit::textChanged, this, &MainWindow::on_artistEdit_textChanged);
+    connect(albumEdit, &QLineEdit::textChanged, this, &MainWindow::on_albumEdit_textChanged);
+    connect(yearEdit, &QLineEdit::textChanged, this, &MainWindow::on_yearEdit_textChanged);
+    connect(genreEdit, &QLineEdit::textChanged, this, &MainWindow::on_genreEdit_textChanged);
+    connect(commentEdit, &QLineEdit::textChanged, this, &MainWindow::on_commentEdit_textChanged);
+    connect(trackEdit, &QLineEdit::textChanged, this, &MainWindow::on_trackEdit_textChanged);
+    connect(discEdit, &QLineEdit::textChanged, this, &MainWindow::on_discEdit_textChanged);
+    connect(composerEdit, &QLineEdit::textChanged, this, &MainWindow::on_composerEdit_textChanged);
+    connect(albumArtistEdit, &QLineEdit::textChanged, this, &MainWindow::on_albumArtistEdit_textChanged);
+
+    // Connect player controls
+    connect(playButton, &QPushButton::clicked, this, &MainWindow::on_playButton_clicked);
+    connect(pauseButton, &QPushButton::clicked, this, &MainWindow::on_pauseButton_clicked);
+    connect(stopButton, &QPushButton::clicked, this, &MainWindow::on_stopButton_clicked);
+    connect(volumeSlider, &QSlider::valueChanged, this, &MainWindow::on_volumeSlider_valueChanged);
+    connect(playbackSlider, &QSlider::sliderMoved, this, &MainWindow::handle_playbackSlider_moved);
+    connect(changeCoverButton, &QPushButton::clicked, this, &MainWindow::on_changeCoverButton_clicked);
+
+    // Connect media player signals
+    connect(mediaPlayer, &MediaPlayer::stateChanged, this, &MainWindow::handle_mediaPlayer_stateChanged);
+    connect(mediaPlayer, &MediaPlayer::positionChanged, this, &MainWindow::handle_mediaPlayer_positionChanged);
+    connect(mediaPlayer, &MediaPlayer::durationChanged, this, &MainWindow::handle_mediaPlayer_durationChanged);
+    connect(mediaPlayer, &MediaPlayer::volumeChanged, this, &MainWindow::handle_mediaPlayer_volumeChanged);
+    connect(mediaPlayer, &MediaPlayer::errorOccurred, this, &MainWindow::handle_mediaPlayer_errorOccurred);
 }
 
-void MainWindow::on_loadButton_clicked()
+void MainWindow::on_actionOpen_triggered()
 {
-    QString filePath = QFileDialog::getOpenFileName(this, "Open MP3 File", "",
-                                                    "MP3 Files (*.mp3);;All Files (*)");
+    QStringList filePaths = QFileDialog::getOpenFileNames(
+        this,
+        tr("Open Audio Files"),
+        QStandardPaths::standardLocations(QStandardPaths::MusicLocation).value(0, QDir::homePath()),
+        tr("Audio Files (*.mp3 *.flac *.ogg *.wma *.m4a);;All Files (*)"));
 
-    if (!filePath.isEmpty()) {
-        qDebug() << "Loading file:" << filePath;
-        if (loadMp3File(filePath)) {
-            fileLabel->setText(QFileInfo(filePath).fileName());
-            saveButton->setEnabled(true);
-            resetButton->setEnabled(true);
-            qDebug() << "File loaded successfully";
-        } else {
-            QMessageBox::warning(this, "Error", "Failed to load MP3 file");
-            qDebug() << "Failed to load file";
-        }
-    } else {
-        qDebug() << "No file selected";
+    if (!filePaths.isEmpty()) {
+        // For simplicity, just load the first file
+        loadMp3File(filePaths.first());
     }
 }
 
-void MainWindow::on_saveButton_clicked()
+void MainWindow::on_actionSave_triggered()
 {
-    qDebug() << "Saving tags...";
+    if (currentFilePath.isEmpty()) {
+        return;
+    }
+
     if (writeMp3Tags()) {
-        QMessageBox::information(this, "Success", "Tags saved successfully");
-        // Update original values
-        originalTitle = titleEdit->text();
-        originalArtist = artistEdit->text();
-        originalAlbum = albumEdit->text();
-        originalYear = yearEdit->text();
-        originalGenre = genreEdit->text();
-        originalComment = commentEdit->text();
-        qDebug() << "Tags saved successfully";
+        updateStatusBar(tr("Tags saved successfully"));
+        enableSaveActions(false);
     } else {
-        QMessageBox::warning(this, "Error", "Failed to save tags");
-        qDebug() << "Failed to save tags";
+        updateStatusBar(tr("Failed to save tags"));
     }
 }
 
-void MainWindow::on_resetButton_clicked()
+void MainWindow::on_actionRemove_triggered()
 {
-    qDebug() << "Resetting tags to original values";
+    if (currentFilePath.isEmpty()) {
+        return;
+    }
+
+    // Clear all tags
+    clearTags();
     updateUIWithTags();
-    qDebug() << "Tags reset to original values";
+    updateStatusBar(tr("Tags cleared"));
+    enableSaveActions(true);
+}
+
+void MainWindow::on_actionExit_triggered()
+{
+    close();
+}
+
+void MainWindow::on_actionAbout_triggered()
+{
+    showAboutDialog();
+}
+
+void MainWindow::on_actionUndo_triggered()
+{
+    // Simple undo - restore original values
+    if (!undoPerformed && !currentFilePath.isEmpty()) {
+        // Save current values for redo
+        undoneTitle = titleEdit->text();
+        undoneArtist = artistEdit->text();
+        undoneAlbum = albumEdit->text();
+        undoneYear = yearEdit->text();
+        undoneGenre = genreEdit->text();
+        undoneComment = commentEdit->text();
+        undoneTrack = trackEdit->text();
+        undoneDisc = discEdit->text();
+        undoneComposer = composerEdit->text();
+        undoneAlbumArtist = albumArtistEdit->text();
+
+        // Restore to original
+        titleEdit->setText(originalTitle);
+        artistEdit->setText(originalArtist);
+        albumEdit->setText(originalAlbum);
+        yearEdit->setText(originalYear);
+        genreEdit->setText(originalGenre);
+        commentEdit->setText(originalComment);
+        trackEdit->setText(originalTrack);
+        discEdit->setText(originalDisc);
+        composerEdit->setText(originalComposer);
+        albumArtistEdit->setText(originalAlbumArtist);
+
+        undoPerformed = true;
+        updateStatusBar(tr("Changes undone"));
+        actionUndo->setEnabled(false);
+        actionRedo->setEnabled(true);
+    }
+}
+
+void MainWindow::on_actionRedo_triggered()
+{
+    if (undoPerformed && !currentFilePath.isEmpty()) {
+        // Restore to undone values
+        titleEdit->setText(undoneTitle);
+        artistEdit->setText(undoneArtist);
+        albumEdit->setText(undoneAlbum);
+        yearEdit->setText(undoneYear);
+        genreEdit->setText(undoneGenre);
+        commentEdit->setText(undoneComment);
+        trackEdit->setText(undoneTrack);
+        discEdit->setText(undoneDisc);
+        composerEdit->setText(undoneComposer);
+        albumArtistEdit->setText(undoneAlbumArtist);
+
+        undoPerformed = false;
+        updateStatusBar(tr("Changes redone"));
+        actionRedo->setEnabled(false);
+        enableSaveActions(true); // Changes are present after redo
+    }
+}
+
+void MainWindow::on_fileTreeView_doubleClicked(const QModelIndex &index)
+{
+    if (!fileSystemModel->isDir(index)) {
+        QString filePath = fileSystemModel->filePath(index);
+        QFileInfo fileInfo(filePath);
+
+        // Check if it's an audio file
+        QStringList audioExtensions = {"mp3", "flac", "ogg", "wma", "m4a"};
+        if (audioExtensions.contains(fileInfo.suffix().toLower())) {
+            loadMp3File(filePath);
+        }
+    }
+}
+
+void MainWindow::on_titleEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalTitle);
+}
+
+void MainWindow::on_artistEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalArtist);
+}
+
+void MainWindow::on_albumEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalAlbum);
+}
+
+void MainWindow::on_yearEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalYear);
+}
+
+void MainWindow::on_genreEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalGenre);
+}
+
+void MainWindow::on_commentEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalComment);
+}
+
+void MainWindow::on_trackEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalTrack);
+}
+
+void MainWindow::on_discEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalDisc);
+}
+
+void MainWindow::on_composerEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalComposer);
+}
+
+void MainWindow::on_albumArtistEdit_textChanged(const QString &text)
+{
+    enableSaveActions(text != originalAlbumArtist);
 }
 
 bool MainWindow::loadMp3File(const QString &filePath)
 {
-    currentFilePath = filePath;
+    QFileInfo fileInfo(filePath);
+    if (!fileInfo.exists()) {
+        QMessageBox::warning(this, tr("Error"), tr("File does not exist"));
+        return false;
+    }
+
+    // Clear previous data
+    clearTags();
 
     try {
-        // Check if file exists and is readable
-        QFile file(currentFilePath);
-        if (!file.exists()) {
-            qDebug() << "File does not exist:" << currentFilePath;
-            QMessageBox::warning(this, "Error", "The selected file does not exist.");
+        TagLib::FileRef fileRef(filePath.toUtf8().constData());
+
+        if (fileRef.isNull()) {
+            QMessageBox::warning(this, tr("Error"), tr("Could not open file for reading"));
             return false;
         }
 
-        if (!file.open(QIODevice::ReadOnly)) {
-            qDebug() << "File cannot be opened for reading:" << currentFilePath;
-            QMessageBox::warning(this, "Error", "The selected file cannot be opened. It may be locked or you don't have permission.");
-            return false;
-        }
-        file.close();
-
-        // Get absolute file path to avoid relative path issues
-        QFileInfo fileInfo(currentFilePath);
-        QString absolutePath = fileInfo.absoluteFilePath();
-        qDebug() << "Using absolute path:" << absolutePath;
-
-        // Convert file path to UTF-8 and handle spaces/special characters
-        QByteArray filePathBytes = absolutePath.toUtf8();
-        qDebug() << "Attempting to open file:" << filePathBytes;
-
-        // Try different path formats for TagLib
-        // First try with the absolute path directly
-        qDebug() << "Trying to open file with absolute path";
-        TagLib::FileRef fileRef(filePathBytes.constData());
-
-        if (fileRef.isNull() || !fileRef.file()) {
-            qDebug() << "FileRef is null with absolute path, trying with quotes";
-
-            // Try with quotes around the path (for paths with spaces)
-            QString quotedPath = "\"" + absolutePath + "\"";
-            QByteArray quotedPathBytes = quotedPath.toUtf8();
-            fileRef = TagLib::FileRef(quotedPathBytes.constData());
-
-            if (fileRef.isNull() || !fileRef.file()) {
-                qDebug() << "FileRef is null with quoted path, trying native path";
-
-                // Try using native file path
-                fileRef = TagLib::FileRef(absolutePath.toLocal8Bit().constData());
-
-                if (fileRef.isNull() || !fileRef.file()) {
-                    qDebug() << "FileRef is null with all path formats - file cannot be opened by TagLib";
-
-                    // Check if file is actually an MP3 file
-                    if (!currentFilePath.endsWith(".mp3", Qt::CaseInsensitive)) {
-                        QMessageBox::warning(this, "Error", "The selected file is not an MP3 file.");
-                    } else {
-                        QMessageBox::warning(this, "Error", "Failed to load MP3 file. The file may be corrupted, not a valid MP3 file, or inaccessible.");
-                    }
-                    return false;
-                }
-            }
-        }
-
-        qDebug() << "FileRef successfully created";
-
-        // Read tags using the already opened FileRef
+        // Read tags
         readMp3Tags(fileRef);
-        updateUIWithTags();
 
-        // Check if all tags are empty
-        if (originalTitle.isEmpty() && originalArtist.isEmpty() && originalAlbum.isEmpty() &&
-            originalYear.isEmpty() && originalGenre.isEmpty() && originalComment.isEmpty()) {
-            QMessageBox::information(this, "No Tags", "The MP3 file was loaded successfully, but it contains no tag information.\n\nYou can add tag information and save it.");
-        } else {
-            QMessageBox::information(this, "Success", "The MP3 file was loaded successfully.\n\nTag information is displayed below.");
-        }
+        // Update UI
+        currentFilePath = filePath;
+        updateUIWithTags();
+        updateFileInfo(filePath);
+        updatePlayerUI(); // Update player UI when file is loaded
+
+        updateStatusBar(tr("Loaded: %1").arg(fileInfo.fileName()));
+        enableSaveActions(false);
+        undoPerformed = false;
 
         return true;
     } catch (const std::exception &e) {
-        qDebug() << "Error loading MP3 file:" << e.what();
-        QMessageBox::warning(this, "Error", "Failed to load MP3 file. Please check the file and try again.");
+        QMessageBox::warning(this, tr("Error"), tr("Failed to load file: %1").arg(e.what()));
         return false;
     }
 }
 
 void MainWindow::readMp3Tags(TagLib::FileRef &fileRef)
 {
-    try {
-        qDebug() << "Reading tags from already opened FileRef";
+    TagLib::Tag *tag = fileRef.tag();
 
-        if (fileRef.isNull() || !fileRef.tag()) {
-            qDebug() << "FileRef is null or tag is null in readMp3Tags";
-            clearTags();
-            return;
+    // Store original values
+    originalTitle = QString::fromWCharArray(tag->title().toCWString());
+    originalArtist = QString::fromWCharArray(tag->artist().toCWString());
+    originalAlbum = QString::fromWCharArray(tag->album().toCWString());
+    originalYear = QString::number(tag->year());
+    originalGenre = QString::fromWCharArray(tag->genre().toCWString());
+    originalComment = QString::fromWCharArray(tag->comment().toCWString());
+
+    // Try to get additional tags from ID3v2 if available
+    TagLib::MPEG::File *mpegFile = dynamic_cast<TagLib::MPEG::File*>(fileRef.file());
+    if (mpegFile && mpegFile->ID3v2Tag()) {
+        TagLib::ID3v2::Tag *id3v2Tag = mpegFile->ID3v2Tag();
+
+        // Get track number
+        TagLib::ID3v2::FrameList frameList = id3v2Tag->frameList("TRCK");
+        if (!frameList.isEmpty()) {
+            TagLib::ID3v2::TextIdentificationFrame *frame =
+                static_cast<TagLib::ID3v2::TextIdentificationFrame*>(frameList.front());
+            originalTrack = QString::fromUtf8(frame->toString().to8Bit(true));
         }
 
-        TagLib::Tag *tag = fileRef.tag();
-        qDebug() << "Tag object created successfully";
+        // Get disc number
+        frameList = id3v2Tag->frameList("TPOS");
+        if (!frameList.isEmpty()) {
+            TagLib::ID3v2::TextIdentificationFrame *frame =
+                static_cast<TagLib::ID3v2::TextIdentificationFrame*>(frameList.front());
+            originalDisc = QString::fromUtf8(frame->toString().to8Bit(true));
+        }
 
-        // Convert TagLib strings to QString using proper UTF-8 conversion
-        // TagLib::String has to8Bit() method that returns std::string
-        originalTitle = QString::fromUtf8(tag->title().to8Bit(true));
-        originalArtist = QString::fromUtf8(tag->artist().to8Bit(true));
-        originalAlbum = QString::fromUtf8(tag->album().to8Bit(true));
-        originalYear = QString::number(tag->year());
-        originalGenre = QString::fromUtf8(tag->genre().to8Bit(true));
-        originalComment = QString::fromUtf8(tag->comment().to8Bit(true));
+        // Get composer
+        frameList = id3v2Tag->frameList("TCOM");
+        if (!frameList.isEmpty()) {
+            TagLib::ID3v2::TextIdentificationFrame *frame =
+                static_cast<TagLib::ID3v2::TextIdentificationFrame*>(frameList.front());
+            originalComposer = QString::fromUtf8(frame->toString().to8Bit(true));
+        }
 
-        // Debug output to see what tags are read
-        qDebug() << "Read tags - Title:" << originalTitle
-                 << "Artist:" << originalArtist
-                 << "Album:" << originalAlbum
-                 << "Year:" << originalYear
-                 << "Genre:" << originalGenre
-                 << "Comment:" << originalComment;
+        // Get album artist
+        frameList = id3v2Tag->frameList("TPE2");
+        if (!frameList.isEmpty()) {
+            TagLib::ID3v2::TextIdentificationFrame *frame =
+                static_cast<TagLib::ID3v2::TextIdentificationFrame*>(frameList.front());
+            originalAlbumArtist = QString::fromUtf8(frame->toString().to8Bit(true));
+        }
 
-        // Try to read album cover using the already opened FileRef
-        try {
-            qDebug() << "Attempting to read album cover using existing FileRef";
+            // Get cover art
+            frameList = id3v2Tag->frameList("APIC");
+            if (!frameList.isEmpty()) {
+                TagLib::ID3v2::AttachedPictureFrame *pictureFrame =
+                    static_cast<TagLib::ID3v2::AttachedPictureFrame*>(frameList.front());
 
-            // Check if the FileRef has ID3v2 tag with album cover
-            TagLib::MPEG::File *mpegFile = dynamic_cast<TagLib::MPEG::File*>(fileRef.file());
-            if (mpegFile && mpegFile->ID3v2Tag()) {
-                qDebug() << "FileRef has ID3v2 tag, looking for album cover";
-                TagLib::ID3v2::Tag *id3v2Tag = mpegFile->ID3v2Tag();
-                TagLib::ID3v2::FrameList frameList = id3v2Tag->frameList("APIC");
-
-                if (!frameList.isEmpty()) {
-                    qDebug() << "Found" << frameList.size() << "APIC frames";
-
-                    // Try each frame until we find a valid image
-                    for (TagLib::ID3v2::FrameList::Iterator it = frameList.begin(); it != frameList.end(); ++it) {
-                        TagLib::ID3v2::AttachedPictureFrame *pictureFrame =
-                            static_cast<TagLib::ID3v2::AttachedPictureFrame*>(*it);
-
-                        if (pictureFrame) {
-                            qDebug() << "Processing picture frame, size:" << pictureFrame->picture().size();
-
-                            if (pictureFrame->picture().size() > 0) {
-                                QByteArray imageData(pictureFrame->picture().data(), pictureFrame->picture().size());
-                                qDebug() << "Image data size:" << imageData.size() << "bytes";
-
-                                // Try to determine image format from MIME type
-                                QString mimeType = QString::fromLatin1(pictureFrame->mimeType().toCString());
-                                qDebug() << "MIME type:" << mimeType;
-
-                                QPixmap pixmap;
-                                if (pixmap.loadFromData(imageData)) {
-                                    qDebug() << "Successfully loaded image from data";
-                                    coverLabel->setPixmap(pixmap.scaled(200, 200, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                                    coverLabel->setAlignment(Qt::AlignCenter);
-                                    qDebug() << "Album cover loaded and displayed successfully";
-                                    break; // Stop after first successful image
-                                } else {
-                                    qDebug() << "Failed to load image from data, trying alternative approach";
-
-                                    // Try saving to temporary file and loading from there
-                                    QTemporaryFile tempFile;
-                                    if (tempFile.open()) {
-                                        tempFile.write(imageData);
-                                        tempFile.close();
-
-                                        if (pixmap.load(tempFile.fileName())) {
-                                            qDebug() << "Successfully loaded image from temporary file";
-                                            coverLabel->setPixmap(pixmap.scaled(200, 200, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                                            coverLabel->setAlignment(Qt::AlignCenter);
-                                            qDebug() << "Album cover loaded from temp file and displayed";
-                                            break;
-                                        } else {
-                                            qDebug() << "Failed to load image from temporary file";
-                                        }
-                                    }
-                                }
-                            } else {
-                                qDebug() << "Picture frame has zero size";
-                            }
-                        }
-                    }
-                } else {
-                    qDebug() << "No APIC frames found in ID3v2 tag";
+                QImage image;
+                if (image.loadFromData(reinterpret_cast<const uchar*>(pictureFrame->picture().data()),
+                                     pictureFrame->picture().size())) {
+                    QPixmap pixmap = QPixmap::fromImage(image);
+                    coverLabel->setPixmap(pixmap.scaled(250, 250, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    playerCoverLabel->setPixmap(pixmap.scaled(250, 250, Qt::KeepAspectRatio, Qt::SmoothTransformation));
                 }
-            } else {
-                qDebug() << "FileRef has no ID3v2 tag, cannot read album cover";
             }
-        } catch (const std::exception &e) {
-            qDebug() << "Error reading album cover:" << e.what();
-            // Don't clear tags if we can't read the cover
-        }
-
-    } catch (const std::exception &e) {
-        qDebug() << "Error reading MP3 tags:" << e.what();
-        clearTags();
     }
 }
 
 bool MainWindow::writeMp3Tags()
 {
+    if (currentFilePath.isEmpty()) {
+        return false;
+    }
+
     try {
-        qDebug() << "Writing tags to file:" << currentFilePath;
+        TagLib::FileRef fileRef(currentFilePath.toUtf8().constData());
 
-        // Convert file path to UTF-8 and keep it alive during FileRef usage
-        QByteArray filePathBytes = currentFilePath.toUtf8();
-        TagLib::FileRef fileRef(filePathBytes.constData());
-
-        if (fileRef.isNull() || !fileRef.tag()) {
-            qDebug() << "FileRef is null or tag is null when saving";
+        if (fileRef.isNull()) {
+            QMessageBox::warning(this, tr("Error"), tr("Could not open file for writing"));
             return false;
         }
 
         TagLib::Tag *tag = fileRef.tag();
-        qDebug() << "Tag object created successfully for saving";
 
-        // Debug output for what we're saving
-        qDebug() << "Saving tags - Title:" << titleEdit->text()
-                 << "Artist:" << artistEdit->text()
-                 << "Album:" << albumEdit->text()
-                 << "Year:" << yearEdit->text()
-                 << "Genre:" << genreEdit->text()
-                 << "Comment:" << commentEdit->text();
-
-        // Set tag values using proper UTF-8 conversion
-        // Convert QString to TagLib::String using UTF-8
-        tag->setTitle(TagLib::String(titleEdit->text().toUtf8().constData(), TagLib::String::UTF8));
-        tag->setArtist(TagLib::String(artistEdit->text().toUtf8().constData(), TagLib::String::UTF8));
-        tag->setAlbum(TagLib::String(albumEdit->text().toUtf8().constData(), TagLib::String::UTF8));
+        // Set standard tags
+        tag->setTitle(titleEdit->text().toStdWString());
+        tag->setArtist(artistEdit->text().toStdWString());
+        tag->setAlbum(albumEdit->text().toStdWString());
         tag->setYear(yearEdit->text().toInt());
-        tag->setGenre(TagLib::String(genreEdit->text().toUtf8().constData(), TagLib::String::UTF8));
-        tag->setComment(TagLib::String(commentEdit->text().toUtf8().constData(), TagLib::String::UTF8));
+        tag->setGenre(genreEdit->text().toStdWString());
+        tag->setComment(commentEdit->text().toStdWString());
 
-        // Save changes
-        bool success = fileRef.save();
-        qDebug() << "Tags save result:" << success;
-        return success;
+        // Try to set additional tags in ID3v2 if available
+        TagLib::MPEG::File *mpegFile = dynamic_cast<TagLib::MPEG::File*>(fileRef.file());
+        if (mpegFile && mpegFile->ID3v2Tag()) {
+            TagLib::ID3v2::Tag *id3v2Tag = mpegFile->ID3v2Tag();
 
+            // Set track number
+            if (!trackEdit->text().isEmpty()) {
+                TagLib::ID3v2::TextIdentificationFrame *frame =
+                    new TagLib::ID3v2::TextIdentificationFrame(TagLib::ByteVector("TRCK"), TagLib::String::UTF8);
+                frame->setText(trackEdit->text().toUtf8().constData());
+                id3v2Tag->addFrame(frame);
+            }
+
+            // Set disc number
+            if (!discEdit->text().isEmpty()) {
+                TagLib::ID3v2::TextIdentificationFrame *frame =
+                    new TagLib::ID3v2::TextIdentificationFrame(TagLib::ByteVector("TPOS"), TagLib::String::UTF8);
+                frame->setText(discEdit->text().toUtf8().constData());
+                id3v2Tag->addFrame(frame);
+            }
+
+            // Set composer
+            if (!composerEdit->text().isEmpty()) {
+                TagLib::ID3v2::TextIdentificationFrame *frame =
+                    new TagLib::ID3v2::TextIdentificationFrame(TagLib::ByteVector("TCOM"), TagLib::String::UTF8);
+                frame->setText(composerEdit->text().toUtf8().constData());
+                id3v2Tag->addFrame(frame);
+            }
+
+            // Set album artist
+            if (!albumArtistEdit->text().isEmpty()) {
+                TagLib::ID3v2::TextIdentificationFrame *frame =
+                    new TagLib::ID3v2::TextIdentificationFrame(TagLib::ByteVector("TPE2"), TagLib::String::UTF8);
+                frame->setText(albumArtistEdit->text().toUtf8().constData());
+                id3v2Tag->addFrame(frame);
+            }
+
+        // Save cover image if available
+        QPixmap currentPixmap = coverLabel->pixmap();
+        if (currentPixmap.isNull()) {
+            // Remove existing cover art if any
+            TagLib::ID3v2::FrameList frameList = id3v2Tag->frameList("APIC");
+            if (!frameList.isEmpty()) {
+                id3v2Tag->removeFrame(frameList.front());
+            }
+        } else {
+            // Save the current cover image
+            QImage image = currentPixmap.toImage();
+
+            if (!image.isNull()) {
+                // Convert QImage to byte array
+                QByteArray byteArray;
+                QBuffer buffer(&byteArray);
+                buffer.open(QIODevice::WriteOnly);
+                image.save(&buffer, "JPEG"); // Save as JPEG
+
+                // Create and add the picture frame
+                TagLib::ID3v2::AttachedPictureFrame *pictureFrame =
+                    new TagLib::ID3v2::AttachedPictureFrame();
+                pictureFrame->setPicture(TagLib::ByteVector(byteArray.constData(), byteArray.size()));
+                pictureFrame->setType(TagLib::ID3v2::AttachedPictureFrame::FrontCover);
+                pictureFrame->setMimeType("image/jpeg");
+
+                // Remove existing cover art first
+                TagLib::ID3v2::FrameList frameList = id3v2Tag->frameList("APIC");
+                if (!frameList.isEmpty()) {
+                    id3v2Tag->removeFrame(frameList.front());
+                }
+
+                id3v2Tag->addFrame(pictureFrame);
+            }
+        }
+
+    }
+
+    // Save changes
+    if (!fileRef.save()) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to save tags"));
+        return false;
+    }
+
+    // Update original values
+    originalTitle = titleEdit->text();
+    originalArtist = artistEdit->text();
+    originalAlbum = albumEdit->text();
+    originalYear = yearEdit->text();
+    originalGenre = genreEdit->text();
+    originalComment = commentEdit->text();
+    originalTrack = trackEdit->text();
+    originalDisc = discEdit->text();
+    originalComposer = composerEdit->text();
+    originalAlbumArtist = albumArtistEdit->text();
+    undoPerformed = false;
+
+    return true;
     } catch (const std::exception &e) {
-        qDebug() << "Error writing MP3 tags:" << e.what();
-        QMessageBox::warning(this, "Error", "Failed to save tags. Please check the file and try again.");
+        QMessageBox::warning(this, tr("Error"), tr("Failed to save tags: %1").arg(e.what()));
         return false;
     }
 }
 
 void MainWindow::updateUIWithTags()
 {
-    // Debug output to see what values are being set
-    qDebug() << "Updating UI with tags - Title:" << originalTitle
-             << "Artist:" << originalArtist
-             << "Album:" << originalAlbum
-             << "Year:" << originalYear
-             << "Genre:" << originalGenre
-             << "Comment:" << originalComment;
-
-    try {
-        // Set text for each field, even if empty
-        titleEdit->setText(originalTitle.isEmpty() ? "" : originalTitle);
-        artistEdit->setText(originalArtist.isEmpty() ? "" : originalArtist);
-        albumEdit->setText(originalAlbum.isEmpty() ? "" : originalAlbum);
-        yearEdit->setText(originalYear.isEmpty() ? "" : originalYear);
-        genreEdit->setText(originalGenre.isEmpty() ? "" : originalGenre);
-        commentEdit->setText(originalComment.isEmpty() ? "" : originalComment);
-
-        // Debug output after setting
-        qDebug() << "UI updated - Title:" << titleEdit->text()
-                 << "Artist:" << artistEdit->text()
-                 << "Album:" << albumEdit->text()
-                 << "Year:" << yearEdit->text()
-                 << "Genre:" << genreEdit->text()
-                 << "Comment:" << commentEdit->text();
-    } catch (const std::exception &e) {
-        qDebug() << "Error updating UI:" << e.what();
-    }
+    titleEdit->setText(originalTitle);
+    artistEdit->setText(originalArtist);
+    albumEdit->setText(originalAlbum);
+    yearEdit->setText(originalYear);
+    genreEdit->setText(originalGenre);
+    commentEdit->setText(originalComment);
+    trackEdit->setText(originalTrack);
+    discEdit->setText(originalDisc);
+    composerEdit->setText(originalComposer);
+    albumArtistEdit->setText(originalAlbumArtist);
 }
 
 void MainWindow::clearTags()
 {
-    qDebug() << "Clearing all tags and UI";
-    currentFilePath.clear();
-    originalTitle = "";
-    originalArtist = "";
-    originalAlbum = "";
-    originalYear = "";
-    originalGenre = "";
-    originalComment = "";
-
-    fileLabel->setText("No file loaded");
-    coverLabel->setPixmap(QPixmap());
-    coverLabel->setText("Album Cover");
+    originalTitle.clear();
+    originalArtist.clear();
+    originalAlbum.clear();
+    originalYear.clear();
+    originalGenre.clear();
+    originalComment.clear();
+    originalTrack.clear();
+    originalDisc.clear();
+    originalComposer.clear();
+    originalAlbumArtist.clear();
 
     titleEdit->clear();
     artistEdit->clear();
@@ -408,8 +651,250 @@ void MainWindow::clearTags()
     yearEdit->clear();
     genreEdit->clear();
     commentEdit->clear();
+    trackEdit->clear();
+    discEdit->clear();
+    composerEdit->clear();
+    albumArtistEdit->clear();
 
-    saveButton->setEnabled(false);
-    resetButton->setEnabled(false);
-    qDebug() << "Tags and UI cleared";
+    coverLabel->setText("No Cover");
+    coverLabel->setPixmap(QPixmap());
+    playerCoverLabel->setText("No Cover");
+    playerCoverLabel->setPixmap(QPixmap());
+
+    // Reset player UI when tags are cleared
+    mediaPlayer->stop();
+    updatePlayerUI();
+}
+
+void MainWindow::updateFileInfo(const QString &filePath)
+{
+    QFileInfo fileInfo(filePath);
+
+    fileNameValue->setText(fileInfo.fileName());
+    filePathValue->setText(fileInfo.absolutePath());
+    fileSizeValue->setText(QString::number(fileInfo.size() / 1024) + " KB");
+
+    // Get file type
+    QMimeDatabase mimeDatabase;
+    QMimeType mimeType = mimeDatabase.mimeTypeForFile(filePath);
+    fileTypeValue->setText(mimeType.name());
+
+    try {
+        TagLib::FileRef fileRef(filePath.toUtf8().constData());
+        if (!fileRef.isNull()) {
+            TagLib::AudioProperties *properties = fileRef.audioProperties();
+            if (properties) {
+                // Duration
+                int duration = properties->lengthInSeconds();
+                int minutes = duration / 60;
+                int seconds = duration % 60;
+                fileDurationValue->setText(QString("%1:%2").arg(minutes, 2, 10, QLatin1Char('0')).arg(seconds, 2, 10, QLatin1Char('0')));
+
+                // Bitrate
+                fileBitrateValue->setText(QString::number(properties->bitrate()) + " kbps");
+
+                // Sample rate
+                fileSampleRateValue->setText(QString::number(properties->sampleRate()) + " Hz");
+
+                // Channels
+                fileChannelsValue->setText(QString::number(properties->channels()));
+            }
+        }
+    } catch (const std::exception &e) {
+        qWarning() << "Failed to get audio properties:" << e.what();
+    }
+}
+
+void MainWindow::updateStatusBar(const QString &message)
+{
+    statusBar()->showMessage(message, 3000);
+}
+
+void MainWindow::enableSaveActions(bool enable)
+{
+    actionSave->setEnabled(enable);
+    actionRemove->setEnabled(enable);
+    actionUndo->setEnabled(enable);
+    actionRedo->setEnabled(undoPerformed);
+}
+
+void MainWindow::showAboutDialog()
+{
+    QMessageBox::about(this, tr("About Mp3Tag Qt"),
+        tr("<h2>Mp3Tag Qt</h2>"
+           "<p>A Qt-based MP3 tag editor inspired by the famous Mp3Tag for Windows.</p>"
+           "<p>Version: 1.0</p>"
+           "<p>Copyright © 2026</p>"
+           "<p>Uses TagLib for audio file tagging.</p>"));
+}
+
+// Player control slots
+void MainWindow::on_playButton_clicked()
+{
+    if (currentFilePath.isEmpty()) {
+        return;
+    }
+
+    // Check if file is an audio file
+    QStringList audioExtensions = {"mp3", "flac", "ogg", "wma", "m4a"};
+    QFileInfo fileInfo(currentFilePath);
+    if (!audioExtensions.contains(fileInfo.suffix().toLower())) {
+        QMessageBox::warning(this, tr("Error"), tr("Selected file is not a supported audio format"));
+        return;
+    }
+
+    mediaPlayer->play(currentFilePath);
+    updatePlayerUI();
+}
+
+void MainWindow::on_pauseButton_clicked()
+{
+    mediaPlayer->pause();
+    updatePlayerUI();
+}
+
+void MainWindow::on_stopButton_clicked()
+{
+    mediaPlayer->stop();
+    updatePlayerUI();
+}
+
+void MainWindow::on_volumeSlider_valueChanged(int value)
+{
+    mediaPlayer->setVolume(value);
+}
+
+void MainWindow::handle_playbackSlider_moved(int value)
+{
+    if (mediaPlayer->duration() > 0) {
+        // Fix the position calculation to ensure proper seeking
+        qint64 position = (value * mediaPlayer->duration()) / 100;
+        qDebug() << "Seeking to position:" << position << "ms (slider value:" << value << ")";
+        mediaPlayer->setPosition(position);
+
+        // Ensure the player is in playing state after seeking
+        if (mediaPlayer->state() == QMediaPlayer::PlayingState) {
+            // No need to restart, just ensure position is updated
+            qDebug() << "Position after seeking:" << mediaPlayer->position();
+        } else if (mediaPlayer->state() == QMediaPlayer::PausedState) {
+            // If paused, we still want to update the position
+            qDebug() << "Updated position while paused:" << mediaPlayer->position();
+        }
+    } else {
+        qDebug() << "Cannot seek - duration is 0 or invalid";
+    }
+}
+
+// Media player signal handlers
+void MainWindow::handle_mediaPlayer_stateChanged(QMediaPlayer::PlaybackState state)
+{
+    updatePlayerUI();
+
+    switch (state) {
+        case QMediaPlayer::PlayingState:
+            playbackStatusValue->setText("Playing");
+            break;
+        case QMediaPlayer::PausedState:
+            playbackStatusValue->setText("Paused");
+            break;
+        case QMediaPlayer::StoppedState:
+            playbackStatusValue->setText("Stopped");
+            playbackPositionValue->setText("00:00");
+            playbackSlider->setValue(0);
+            break;
+    }
+}
+
+void MainWindow::handle_mediaPlayer_positionChanged(qint64 position)
+{
+    if (mediaPlayer->duration() > 0) {
+        // Update position display
+        int seconds = position / 1000;
+        int minutes = seconds / 60;
+        seconds = seconds % 60;
+        playbackPositionValue->setText(QString("%1:%2").arg(minutes, 2, 10, QLatin1Char('0')).arg(seconds, 2, 10, QLatin1Char('0')));
+
+        // Update slider position
+        int sliderValue = (position * 100) / mediaPlayer->duration();
+        playbackSlider->setValue(sliderValue);
+    }
+}
+
+void MainWindow::handle_mediaPlayer_durationChanged(qint64 duration)
+{
+    if (duration > 0) {
+        // Update duration display
+        int seconds = duration / 1000;
+        int minutes = seconds / 60;
+        seconds = seconds % 60;
+        playbackDurationValue->setText(QString("%1:%2").arg(minutes, 2, 10, QLatin1Char('0')).arg(seconds, 2, 10, QLatin1Char('0')));
+    }
+}
+
+void MainWindow::handle_mediaPlayer_volumeChanged(int volume)
+{
+    volumeSlider->setValue(volume);
+}
+
+void MainWindow::handle_mediaPlayer_errorOccurred(const QString &errorString)
+{
+    QMessageBox::warning(this, tr("Playback Error"), errorString);
+    playbackStatusValue->setText("Error: " + errorString);
+}
+
+// Helper method to update player UI state
+void MainWindow::updatePlayerUI()
+{
+    bool hasFile = !currentFilePath.isEmpty();
+    bool isPlaying = mediaPlayer->isPlaying();
+
+    playButton->setEnabled(hasFile && !isPlaying);
+    pauseButton->setEnabled(hasFile && isPlaying);
+    stopButton->setEnabled(hasFile && (isPlaying || mediaPlayer->state() == QMediaPlayer::PausedState));
+    changeCoverButton->setEnabled(hasFile);
+
+    if (hasFile) {
+        QFileInfo fileInfo(currentFilePath);
+        currentFileValue->setText(fileInfo.fileName());
+    } else {
+        currentFileValue->setText("-");
+    }
+}
+
+// Cover change functionality
+void MainWindow::on_changeCoverButton_clicked()
+{
+    if (currentFilePath.isEmpty()) {
+        QMessageBox::warning(this, tr("Error"), tr("No file loaded"));
+        return;
+    }
+
+    // Open file dialog to select an image
+    QString imagePath = QFileDialog::getOpenFileName(
+        this,
+        tr("Select Cover Image"),
+        QStandardPaths::standardLocations(QStandardPaths::PicturesLocation).value(0, QDir::homePath()),
+        tr("Image Files (*.jpg *.jpeg *.png *.bmp *.gif);;All Files (*)"));
+
+    if (imagePath.isEmpty()) {
+        return; // User cancelled
+    }
+
+    // Load the selected image
+    QImage image(imagePath);
+    if (image.isNull()) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to load image file"));
+        return;
+    }
+
+    // Scale and display the image
+    QPixmap pixmap = QPixmap::fromImage(image);
+    pixmap = pixmap.scaled(200, 200, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+    coverLabel->setPixmap(pixmap);
+    playerCoverLabel->setPixmap(pixmap);
+
+    // Mark as modified
+    enableSaveActions(true);
+    updateStatusBar(tr("Cover image changed"));
 }
